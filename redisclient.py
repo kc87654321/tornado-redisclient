@@ -5,9 +5,10 @@ import socket
 
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
-from tornado.util import import_object, bytes_type
+from tornado.util import bytes_type
 
 class AsyncRedisClient(object):
+    '''https://github.com/d3vz3r0/tornado-redis/blob/master/redis/redis.py'''
 
     stream_pool = {}
 
@@ -43,8 +44,8 @@ class AsyncRedisClient(object):
         self.fetch(self._request, self._callback)
 
     def _on_write(self):
-        self._data = ''
-        self.stream.read_util('\r\n', self._on_read_first_line)
+        self._data = bytes_type()
+        self.stream.read_util(bytes_type('\r\n'), self._on_read_first_line)
 
     def _on_read_first_line(self, data):
         bulk = data[0]
@@ -53,7 +54,7 @@ class AsyncRedisClient(object):
         elif bulk == '$':
             self._data_line_number = int(data[1:])
             self._data += data
-            self.stream.read_util('\r\n', self._on_read_line)
+            self.stream.read_util(bytes_type('\r\n'), self._on_read_line)
 
     def _on_read_line(self, data):
         self._data_line_number -= 1
@@ -71,14 +72,13 @@ class AsyncRedisClient(object):
 
 class RedisRequest(object):
 
-    def __init__(self, raw):
-        self.raw = raw
-
+    def __init__(self, data):
+        self.data = data
 
 class RedisResponse(object):
 
-    def __init__(self, raw):
-        self.raw = raw
+    def __init__(self, data):
+        self.data = data
 
 class RedisPError(Exception):
     def __init__(self, code, message=None, response=None):
