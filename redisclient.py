@@ -57,43 +57,28 @@ def decode(data):
 class AsyncRedisClient(object):
     '''http://ordinary.iteye.com/blog/1097456'''
 
-    stream_pool = {}
-
-    def __init__(self, address, io_loop=None, ):
-        self.io_loop = io_loop or IOLoop.instance()
-        self.address = address
-        if address not in self.stream_pool:
-            self.stream_pool[address] = set([])
-        self.stream_set = self.stream_pool[address]
-        stream = None
-        while self.stream_set:
-            stream = self.stream_set.pop()
-            if not stream.closed():
-                break
-        if stream is None:
-            sock = socket.socket()
-            stream = IOStream(sock, io_loop=self.io_loop)
-            stream._connected = False
-        else:
-            stream._connected = True
-        self.stream = stream
+    def __init__(self, address, io_loop=None):
+        self.address        = address
+        self.io_loop        = io_loop or IOLoop.instance()
+        self._command_queue = collections.deque()
+        self.socket         = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.stream         = IOStream(self.socket)
+        self.stream.connect(self.address, self._process_command)
 
     def fetch(self, request, callback):
-        self._request  = request
-        self._callback = callback
-        if not self.stream._connected:
-            self.stream.connect(self.address, self._on_connect)
-        else:
+        self._command_queue.append((request, callback))
+
+    def _process_command(self):
+        if self._command_queue:
+            self._request, self._callback = self._command_queue.popleft()
             data = encode(self._request)
             self.stream.write(data, self._on_write)
 
     def _execute_callback(self):
         result = decode(self._data)
         self._callback(result)
-
-    def _on_connect(self):
-        self.stream._connected = True
-        self.fetch(self._request, self._callback)
+        if self._command_queue:
+            self._process_command()
 
     def _on_write(self):
         self._data = bytes_type()
@@ -143,6 +128,8 @@ def main():
     def handle_result(result):
         print 'Redis reply: %r' % result
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
+    redis_client.fetch(('LPUSH', 'l', 1), handle_result)
+    redis_client.fetch(('LPUSH', 'l', 2), handle_result)
     redis_client.fetch(('LRANGE', 'l', 0, -1), handle_result)
     IOLoop.instance().start()
 
