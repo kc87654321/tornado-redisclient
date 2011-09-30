@@ -10,7 +10,7 @@ from tornado.util import bytes_type
 
 class RedisPError(Exception):
     def __init__(self, message=None):
-        message = message or 'Unknown'
+        message = message or 'Unknown Redis Error'
         Exception.__init__(self, 'Redis %s' % message)
 
 def encode(request):
@@ -81,37 +81,41 @@ class AsyncRedisClient(object):
             data = encode(self._request)
             self.stream.write(data, self._on_write)
 
-    def _execute_callback(self):
-        result = decode(self._data)
-        self._callback(result)
-        if self._command_queue:
-            self._process_command()
+    def _run_callback(self):
+        try:
+            result = decode(self._data)
+            self._callback(result)
+        except Exception:
+            logging.error("Uncaught callback exception", exc_info=True)
+            raise
+        finally:
+            if self._command_queue:
+                self._process_command()
 
     def _on_write(self):
-        self._data = bytes_type()
         self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
     def _on_read_first_line(self, data):
         self._data = data
         c = data[0]
         if c in '+-:':
-            self._execute_callback()
+            self._run_callback()
         elif c == '$':
             if data[:3] == '$-1':
-                self._execute_callback()
+                self._run_callback()
             else:
                 length = int(data[1:])
                 self.stream.read_bytes(length+2, self._on_read_bulk_line)
         elif c == '*':
             if data[1] in '-0' :
-                self._execute_callback()
+                self._run_callback()
             else:
                 self._multibulk_number = int(data[1:])
-                self.stream.read_until('\r\n', self._on_read_multibulk_linehead)
+                self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
 
     def _on_read_bulk_line(self, data):
         self._data += data
-        self._execute_callback()
+        self._run_callback()
 
     def _on_read_multibulk_linehead(self, data):
         self._data += data
@@ -122,9 +126,9 @@ class AsyncRedisClient(object):
         self._data += data
         self._multibulk_number -= 1
         if self._multibulk_number:
-            self.stream.read_until('\r\n', self._on_read_multibulk_linehead)
+            self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
         else:
-            self._execute_callback()
+            self._run_callback()
 
 def main():
     def handle_result(result):
