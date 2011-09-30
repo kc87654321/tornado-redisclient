@@ -82,7 +82,6 @@ class AsyncRedisClient(object):
         self._request  = request
         self._callback = callback
         if not self.stream._connected:
-            print 'try connect'
             self.stream.connect(self.address, self._on_connect)
         else:
             data = encode(self._request)
@@ -93,7 +92,6 @@ class AsyncRedisClient(object):
         self._callback(result)
 
     def _on_connect(self):
-        print 'connectd'
         self.stream._connected = True
         self.fetch(self._request, self._callback)
 
@@ -102,24 +100,20 @@ class AsyncRedisClient(object):
         self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
     def _on_read_first_line(self, data):
+        self._data = data
         c = data[0]
         if c in '+-:':
-            self._data = data
             self._execute_callback()
         elif c == '$':
             if data[:3] == '$-1':
-                self._data = data
                 self._execute_callback()
             else:
-                self._data = data
                 length = int(data[1:])
                 self.stream.read_bytes(length+2, self._on_read_bulk_line)
         elif c == '*':
-            if data[:3] == '*-1':
-                self._data = data
+            if data[1] in '-0' :
                 self._execute_callback()
             else:
-                self._data = data
                 self._multibulk_number = int(data[1:])
                 self.stream.read_until('\r\n', self._on_read_multibulk_linehead)
 
