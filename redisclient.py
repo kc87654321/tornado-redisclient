@@ -59,7 +59,7 @@ class AsyncRedisClient(object):
 
     stream_pool = {}
 
-    def __init__(self, io_loop=None, address=('127.0.0.1', 6789)):
+    def __init__(self, address, io_loop=None, ):
         self.io_loop = io_loop or IOLoop.instance()
         self.address = address
         if address not in self.stream_pool:
@@ -72,7 +72,7 @@ class AsyncRedisClient(object):
                 break
         if stream is None:
             sock = socket.socket()
-            stream = IOStream(sock)
+            stream = IOStream(sock, io_loop=self.io_loop)
             stream._connected = False
         else:
             stream._connected = True
@@ -82,6 +82,7 @@ class AsyncRedisClient(object):
         self._request  = request
         self._callback = callback
         if not self.stream._connected:
+            print 'try connect'
             self.stream.connect(self.address, self._on_connect)
         else:
             data = encode(self._request)
@@ -92,12 +93,13 @@ class AsyncRedisClient(object):
         self._callback(result)
 
     def _on_connect(self):
+        print 'connectd'
         self.stream._connected = True
         self.fetch(self._request, self._callback)
 
     def _on_write(self):
         self._data = bytes_type()
-        self.stream.read_util(bytes_type('\r\n'), self._on_read_first_line)
+        self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
     def _on_read_first_line(self, data):
         c = data[0]
@@ -119,7 +121,7 @@ class AsyncRedisClient(object):
             else:
                 self._data = data
                 self._multibulk_number = int(data[1:])
-                self.stream.read_util('\r\n', self._on_read_multibulk_linehead)
+                self.stream.read_until('\r\n', self._on_read_multibulk_linehead)
 
     def _on_read_bulk_line(self, data):
         self._data += data
@@ -134,7 +136,7 @@ class AsyncRedisClient(object):
         self._data += data
         self._multibulk_number -= 1
         if self._multibulk_number:
-            self.stream.read_util('\r\n', self._on_read_multibulk_linehead)
+            self.stream.read_until('\r\n', self._on_read_multibulk_linehead)
         else:
             self._execute_callback()
 
@@ -143,9 +145,12 @@ class AsyncRedisClient(object):
         self.stream = None
         self.stream_set = None
 
-
 def main():
-    pass
+    def handle_result(result):
+        print 'Redis reply: %r' % result
+    redis_client = AsyncRedisClient(('127.0.0.1', 6379))
+    redis_client.fetch(('LRANGE', 'l', 0, -1), handle_result)
+    IOLoop.instance().start()
 
 if __name__ == "__main__":
     main()
