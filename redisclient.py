@@ -1,5 +1,6 @@
 """non-blocking Redis client interfaces."""
 
+import time
 import collections
 import socket
 
@@ -65,8 +66,14 @@ class AsyncRedisClient(object):
         self.stream         = IOStream(self.socket)
         self.stream.connect(self.address, self._process_command)
 
+    def close(self):
+        print 'close stream'
+        self.stream.close()
+
     def fetch(self, request, callback):
         self._command_queue.append((request, callback))
+        if not self.stream._connecting:
+            self._process_command()
 
     def _process_command(self):
         if self._command_queue:
@@ -119,11 +126,6 @@ class AsyncRedisClient(object):
         else:
             self._execute_callback()
 
-    def close(self):
-        self.stream_set.add(self.stream)
-        self.stream = None
-        self.stream_set = None
-
 def main():
     def handle_result(result):
         print 'Redis reply: %r' % result
@@ -131,6 +133,8 @@ def main():
     redis_client.fetch(('LPUSH', 'l', 1), handle_result)
     redis_client.fetch(('LPUSH', 'l', 2), handle_result)
     redis_client.fetch(('LRANGE', 'l', 0, -1), handle_result)
+    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('LLEN', 'l'), handle_result))
+    IOLoop.instance().add_timeout(time.time()+3, lambda:redis_client.close())
     IOLoop.instance().start()
 
 if __name__ == "__main__":
