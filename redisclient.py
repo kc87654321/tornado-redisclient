@@ -68,64 +68,54 @@ class AsyncRedisClient(object):
     '''http://ordinary.iteye.com/blog/1097456'''
 
     def __init__(self, address, io_loop=None):
-        self.address        = address
-        self.io_loop        = io_loop or IOLoop.instance()
-        self._command_queue = collections.deque()
-        self._subscribe_callback = None
-        self.socket         = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.stream         = IOStream(self.socket)
-        self.stream.connect(self.address, self._process_command)
+        self.address         = address
+        self.io_loop         = io_loop or IOLoop.instance()
+        self._callback_queue = collections.deque()
+        self._result_queue   = collections.deque()
+        self.socket          = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.stream          = IOStream(self.socket)
+        self.stream.connect(self.address, self._wait_result)
 
     def close(self):
         self.stream.close()
 
     def fetch(self, request, callback):
-        self._command_queue.append((request, callback))
-        if not self.stream._connecting:
-            self._process_command()
+        data = encode(request)
+        self.stream.write(data)
+        self._callback = callback
+        self._callback_queue.append(callback)
 
-    def subscribe(self, channel, callback):
-        self._subscribe_callback = callback
-        self.fetch(('SUBSCRIBE', channel), callback)
-
-    def _process_command(self):
-        if self._command_queue:
-            self._request, self._callback = self._command_queue.popleft()
-            data = encode(self._request)
-            self.stream.write(data, self._on_write)
+    def _wait_result(self):
+        self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
     def _run_callback(self):
         try:
-            result = decode(self._data)
-            if not self._subscribe_callback:
-                self._callback(result)
-            else:
-                self._subscribe_callback(result)
+            data = self._result_queue.popleft()
+            result = decode(data)
+            if self._callback_queue:
+                self._callback = self._callback_queue.popleft()
+            self._callback(result)
+            self._wait_result()
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
             raise
-        finally:
-            if self._command_queue:
-                self._process_command()
-            if self._subscribe_callback and not self.stream.reading():
-                self._on_write()
-
-    def _on_write(self):
-        self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
     def _on_read_first_line(self, data):
         self._data = data
         c = data[0]
         if c in '+-:':
+            self._result_queue.append(self._data)
             self._run_callback()
         elif c == '$':
             if data[:3] == '$-1':
+                self._result_queue.append(self._data)
                 self._run_callback()
             else:
                 length = int(data[1:])
                 self.stream.read_bytes(length+2, self._on_read_bulk_line)
         elif c == '*':
             if data[1] in '-0' :
+                self._result_queue.append(self._data)
                 self._run_callback()
             else:
                 self._multibulk_number = int(data[1:])
@@ -133,6 +123,7 @@ class AsyncRedisClient(object):
 
     def _on_read_bulk_line(self, data):
         self._data += data
+        self._result_queue.append(self._data)
         self._run_callback()
 
     def _on_read_multibulk_linehead(self, data):
@@ -142,6 +133,7 @@ class AsyncRedisClient(object):
             length = int(data[1:])
             self.stream.read_bytes(length+2, self._on_read_multibulk_linebody)
         else:
+            self._result_queue.append(self._data)
             self._run_callback()
 
     def _on_read_multibulk_linebody(self, data):
@@ -150,6 +142,7 @@ class AsyncRedisClient(object):
         if self._multibulk_number:
             self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
         else:
+            self._result_queue.append(self._data)
             self._run_callback()
 
 def main():
@@ -160,7 +153,7 @@ def main():
     redis_client.fetch(('lpush', 'l', 2), handle_result)
     redis_client.fetch(('lrange', 'l', 0, -1), handle_result)
     IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('llen', 'l'), handle_result))
-    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.subscribe('cc', handle_result))
+    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('subscribe', 'cc'), handle_result))
     IOLoop.instance().start()
 
 if __name__ == '__main__':
