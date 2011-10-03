@@ -95,10 +95,11 @@ class AsyncRedisClient(object):
             if self._callback_queue:
                 self._callback = self._callback_queue.popleft()
             self._callback(result)
-            self._wait_result()
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
             raise
+        finally:
+            self._wait_result()
 
     def _on_read_first_line(self, data):
         self._data = data
