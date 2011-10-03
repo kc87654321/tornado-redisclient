@@ -65,7 +65,7 @@ def decode(data):
                     iodata.read(2)
                     result.append(element)
                 else:
-                    if 'c' == ':':
+                    if c == ':':
                         element = int(iodata.readline())
                     else:
                         element = iodata.readline()[:-2]
@@ -110,6 +110,7 @@ class AsyncRedisClient(object):
         self.address         = address
         self.io_loop         = io_loop or IOLoop.instance()
         self._callback_queue = collections.deque()
+        self._callback       = None
         self._result_queue   = collections.deque()
         self.socket          = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.stream          = IOStream(self.socket)
@@ -138,15 +139,21 @@ class AsyncRedisClient(object):
         self._callback_queue.append(callback)
 
     def _wait_result(self):
+        """Read a completed result data from the redis server."""
         self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
 
-    def _run_callback(self):
+    def _maybe_callback(self, data):
+        """Try call callback in _callback_queue when we read a redis result."""
         try:
-            data = self._result_queue.popleft()
-            result = decode(data)
+            if self._result_queue:
+                self._result_queue.append(data)
+                data = self._result_queue.popleft()
             if self._callback_queue:
-                self._callback = self._callback_queue.popleft()
-            self._callback(result)
+                callback = self._callback_queue.popleft()
+            else:
+                callback = self._callback
+            result = decode(data)
+            callback(result)
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
             raise
@@ -157,27 +164,23 @@ class AsyncRedisClient(object):
         self._data = data
         c = data[0]
         if c in '+-:':
-            self._result_queue.append(self._data)
-            self._run_callback()
+            self._maybe_callback(self._data)
         elif c == '$':
             if data[:3] == '$-1':
-                self._result_queue.append(self._data)
-                self._run_callback()
+                self._maybe_callback(self._data)
             else:
                 length = int(data[1:])
                 self.stream.read_bytes(length+2, self._on_read_bulk_line)
         elif c == '*':
             if data[1] in '-0' :
-                self._result_queue.append(self._data)
-                self._run_callback()
+                self._maybe_callback(self._data)
             else:
                 self._multibulk_number = int(data[1:])
                 self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
 
     def _on_read_bulk_line(self, data):
         self._data += data
-        self._result_queue.append(self._data)
-        self._run_callback()
+        self._maybe_callback(self._data)
 
     def _on_read_multibulk_linehead(self, data):
         self._data += data
@@ -186,8 +189,7 @@ class AsyncRedisClient(object):
             length = int(data[1:])
             self.stream.read_bytes(length+2, self._on_read_multibulk_linebody)
         else:
-            self._result_queue.append(self._data)
-            self._run_callback()
+            self._maybe_callback(self._data)
 
     def _on_read_multibulk_linebody(self, data):
         self._data += data
@@ -195,8 +197,7 @@ class AsyncRedisClient(object):
         if self._multibulk_number:
             self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
         else:
-            self._result_queue.append(self._data)
-            self._run_callback()
+            self._maybe_callback(self._data)
 
 class RedisError(Exception):
     """Exception thrown for an unsuccessful Redis request.
