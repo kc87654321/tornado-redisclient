@@ -220,7 +220,7 @@ def main():
     redis_client.fetch(('lpush', 'l', 2), handle_result)
     redis_client.fetch(('lrange', 'l', 0, -1), handle_result)
     IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('llen', 'l'), handle_result))
-    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('subscribe', 'cc'), handle_result))
+    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('psubscribe', '*'), handle_result))
     IOLoop.instance().start()
 
 if __name__ == '__main__':
