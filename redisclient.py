@@ -86,7 +86,7 @@ class AsyncRedisClient(object):
             print 'Redis reply: %r' % result
             ioloop.IOLoop.instance().stop()
 
-        redis_client = httpclient.AsyncHTTPClient(('127.0.0.1', 6379))
+        redis_client = AsyncRedisClient(('127.0.0.1', 6379))
         redis_client.fetch(('set', 'foo', 'bar'), handle_result)
         ioloop.IOLoop.instance().start()
 
