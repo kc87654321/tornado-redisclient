@@ -8,7 +8,7 @@ import cStringIO
 
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
-from tornado.util import bytes_type
+from tornado.util import bytes_type, b
 
 class RedisError(Exception):
     def __init__(self, message=None):
@@ -29,7 +29,8 @@ def decode(data):
     if c == '+':
         return True
     elif c == '-':
-        return iodata.readline().rstrip()
+        error = iodata.readline().rstrip()
+        raise RedisError(error)
     elif c == ':':
         return int(iodata.readline())
     elif c == '$':
