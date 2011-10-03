@@ -113,7 +113,7 @@ class AsyncRedisClient(object):
         self._callback       = None
         self._result_queue   = collections.deque()
         self.socket          = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.stream          = IOStream(self.socket)
+        self.stream          = IOStream(self.socket, self.io_loop)
         self.stream.connect(self.address, self._wait_result)
 
     def close(self):
@@ -140,7 +140,7 @@ class AsyncRedisClient(object):
 
     def _wait_result(self):
         """Read a completed result data from the redis server."""
-        self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
+        self.stream.read_until(b('\r\n'), self._on_read_first_line)
 
     def _maybe_callback(self, data):
         """Try call callback in _callback_queue when we read a redis result."""
@@ -152,10 +152,12 @@ class AsyncRedisClient(object):
                 callback = self._callback_queue.popleft()
             else:
                 callback = self._callback
-            result = decode(data)
-            callback(result)
+            if callback:
+                result = decode(data)
+                callback(result)
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
+            self.close()
             raise
         finally:
             self._wait_result()
@@ -163,39 +165,39 @@ class AsyncRedisClient(object):
     def _on_read_first_line(self, data):
         self._data = data
         c = data[0]
-        if c in '+-:':
+        if c in ':+-':
             self._maybe_callback(self._data)
         elif c == '$':
             if data[:3] == '$-1':
                 self._maybe_callback(self._data)
             else:
                 length = int(data[1:])
-                self.stream.read_bytes(length+2, self._on_read_bulk_line)
+                self.stream.read_bytes(length+2, self._on_read_bulk_body)
         elif c == '*':
             if data[1] in '-0' :
                 self._maybe_callback(self._data)
             else:
                 self._multibulk_number = int(data[1:])
-                self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
+                self.stream.read_until(b('\r\n'), self._on_read_multibulk_bulk_head)
 
-    def _on_read_bulk_line(self, data):
+    def _on_read_bulk_body(self, data):
         self._data += data
         self._maybe_callback(self._data)
 
-    def _on_read_multibulk_linehead(self, data):
+    def _on_read_multibulk_bulk_head(self, data):
         self._data += data
         c = data[0]
         if c == '$':
             length = int(data[1:])
-            self.stream.read_bytes(length+2, self._on_read_multibulk_linebody)
+            self.stream.read_bytes(length+2, self._on_read_multibulk_bulk_body)
         else:
             self._maybe_callback(self._data)
 
-    def _on_read_multibulk_linebody(self, data):
+    def _on_read_multibulk_bulk_body(self, data):
         self._data += data
         self._multibulk_number -= 1
         if self._multibulk_number:
-            self.stream.read_until(bytes_type('\r\n'), self._on_read_multibulk_linehead)
+            self.stream.read_until(b('\r\n'), self._on_read_multibulk_bulk_head)
         else:
             self._maybe_callback(self._data)
 
