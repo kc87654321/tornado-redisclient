@@ -1,19 +1,29 @@
-"""non-blocking Redis client interfaces."""
+#!/usr/bin/env python
+#
+# Copyright 2009 Phus Lu
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
 
-import time
-import socket
-import logging
+"""Blocking and non-blocking Redis client implementations using IOStream."""
+
 import collections
 import cStringIO
+import logging
+import socket
 
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 from tornado.util import bytes_type, b
-
-class RedisError(Exception):
-    def __init__(self, message=None):
-        message = message or 'Unknown Redis Error'
-        Exception.__init__(self, 'Redis %s' % message)
 
 def encode(request):
     '''print repr(encode(('SET', 'mykey', 123)))'''
@@ -66,9 +76,37 @@ def decode(data):
         raise RedisError('Redis Reply TypeError: bulk cannot startswith %r', c)
 
 class AsyncRedisClient(object):
-    '''http://ordinary.iteye.com/blog/1097456'''
+    """An non-blocking Redis client.
+
+    Example usage::
+
+        import ioloop
+
+        def handle_request(response):
+            print 'Redis reply: %r' % result
+            ioloop.IOLoop.instance().stop()
+
+        redis_client = httpclient.AsyncHTTPClient(('127.0.0.1', 6379))
+        redis_client.fetch(('set', 'foo', 'bar'), handle_result)
+        ioloop.IOLoop.instance().start()
+
+    This class implements a Redis client on top of Tornado's IOStreams.
+    It does not currently implement all applicable parts of the Redis
+    specification, but it does enough to work with major redis server APIs
+    (mostly tested against the LIST/HASH/PUBSUB API so far).
+
+    This class has not been tested extensively in production and
+    should be considered somewhat experimental as of the release of
+    tornado 1.2.  It is intended to become the default tornado
+    AsyncRedisClient implementation.
+    """
 
     def __init__(self, address, io_loop=None):
+        """Creates a AsyncRedisClient.
+
+        address is the tuple of redis server address that can be connect by
+        IOStream. It defaults to ('127.0.0.1', 6379)
+        """
         self.address         = address
         self.io_loop         = io_loop or IOLoop.instance()
         self._callback_queue = collections.deque()
@@ -78,9 +116,22 @@ class AsyncRedisClient(object):
         self.stream.connect(self.address, self._wait_result)
 
     def close(self):
+        """Destroys this redis client, freeing any file descriptors used.
+        Not needed in normal use, but may be helpful in unittests that
+        create and destroy redis clients.  No other methods may be called
+        on the AsyncRedisClient after close().
+        """
         self.stream.close()
 
     def fetch(self, request, callback):
+        """Executes a request, calling callback with an redis `result`.
+
+        The request shuold be a string tuple. like ('set', 'foo', 'bar')
+
+        If an error occurs during the fetch, a `RedisError` exception will
+        throw out. You can use try...except to catch the exception (if any)
+        in the callback.
+        """
         data = encode(request)
         self.stream.write(data)
         self._callback = callback
@@ -147,7 +198,21 @@ class AsyncRedisClient(object):
             self._result_queue.append(self._data)
             self._run_callback()
 
+class RedisError(Exception):
+    """Exception thrown for an unsuccessful Redis request.
+
+    Attributes:
+
+    data - Redis error data error code, e.g. -(ERR).
+    """
+    def __init__(self, data, message=None):
+        self.data = data
+        message = message or 'Unknown Redis Error'
+        Exception.__init__(self, 'Redis Error %s:%r' % (message, self.data))
+
+
 def main():
+    import time
     def handle_result(result):
         print 'Redis reply: %r' % result
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
