@@ -21,6 +21,7 @@ def encode(request):
 
 def decode(data):
     '''print decode('*4\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$5\r\nhello\r\n$5\r\nworld\r\n')'''
+    '''print decode('*4\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$5\r\nhello\r\n:42\r\n')'''
     assert type(data) is bytes_type
     c = data[0]
     if c == '+':
@@ -45,11 +46,17 @@ def decode(data):
             number = int(data[1:pos])
             pos1 = pos2 = pos + 2
             while number:
-                pos2    = data.find('\r\n', pos1)
-                length  = int(data[pos1+1:pos2])
-                element = data[pos2+2:pos2+2+length]
-                pos1    = pos2 + length + 4
-                result.append(element)
+                if data[pos1] == '$':
+                    pos2    = data.find('\r\n', pos1)
+                    length  = int(data[pos1+1:pos2])
+                    element = data[pos2+2:pos2+2+length]
+                    pos1    = pos2 + length + 4
+                    result.append(element)
+                else:
+                    pos2    = data.find('\r\n', pos1)
+                    element = data[pos1+1:pos2]
+                    pos1    = pos2 + 2
+                    result.append(element)
                 number -= 1
             return result
     else:
@@ -62,18 +69,22 @@ class AsyncRedisClient(object):
         self.address        = address
         self.io_loop        = io_loop or IOLoop.instance()
         self._command_queue = collections.deque()
+        self._subscribe_callback = None
         self.socket         = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.stream         = IOStream(self.socket)
         self.stream.connect(self.address, self._process_command)
 
     def close(self):
-        print 'close stream'
         self.stream.close()
 
     def fetch(self, request, callback):
         self._command_queue.append((request, callback))
         if not self.stream._connecting:
             self._process_command()
+
+    def subscribe(self, channel, callback):
+        self._subscribe_callback = callback
+        self.fetch(('SUBSCRIBE', channel), callback)
 
     def _process_command(self):
         if self._command_queue:
@@ -84,13 +95,19 @@ class AsyncRedisClient(object):
     def _run_callback(self):
         try:
             result = decode(self._data)
-            self._callback(result)
+            if not self._subscribe_callback:
+                self._callback(result)
+            else:
+                self._subscribe_callback(result)
         except Exception:
             logging.error("Uncaught callback exception", exc_info=True)
             raise
         finally:
             if self._command_queue:
                 self._process_command()
+            if self._subscribe_callback and not self.stream.reading():
+                self._on_write()
+
 
     def _on_write(self):
         self.stream.read_until(bytes_type('\r\n'), self._on_read_first_line)
@@ -119,10 +136,14 @@ class AsyncRedisClient(object):
 
     def _on_read_multibulk_linehead(self, data):
         self._data += data
-        length = int(data[1:])
-        self.stream.read_bytes(length+2, self.__on_read_multibulk_linebody)
+        c = data[0]
+        if c == '$':
+            length = int(data[1:])
+            self.stream.read_bytes(length+2, self._on_read_multibulk_linebody)
+        else:
+            self._run_callback()
 
-    def __on_read_multibulk_linebody(self, data):
+    def _on_read_multibulk_linebody(self, data):
         self._data += data
         self._multibulk_number -= 1
         if self._multibulk_number:
@@ -134,11 +155,12 @@ def main():
     def handle_result(result):
         print 'Redis reply: %r' % result
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
+
     redis_client.fetch(('LPUSH', 'l', 1), handle_result)
     redis_client.fetch(('LPUSH', 'l', 2), handle_result)
     redis_client.fetch(('LRANGE', 'l', 0, -1), handle_result)
-    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('LLEN', 'l'), handle_result))
-    IOLoop.instance().add_timeout(time.time()+3, lambda:redis_client.close())
+    IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('LLEN', 'l'), handle_result))
+    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.subscribe('cc', handle_result))
     IOLoop.instance().start()
 
 if __name__ == "__main__":
