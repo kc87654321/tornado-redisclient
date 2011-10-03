@@ -63,7 +63,7 @@ def decode(data):
                 number -= 1
             return result
     else:
-        raise RedisError('Unknown Redis bulk startswith %r', c)
+        raise RedisError('Redis Reply TypeError: bulk cannot startswith %r', c)
 
 class AsyncRedisClient(object):
     '''http://ordinary.iteye.com/blog/1097456'''
