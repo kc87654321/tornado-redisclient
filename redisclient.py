@@ -54,7 +54,10 @@ def decode(data):
                     iodata.read(2)
                     result.append(element)
                 else:
-                    element = iodata.readline()[:-2]
+                    if 'c' == ':':
+                        element = int(iodata.readline())
+                    else:
+                        element = iodata.readline()[:-2]
                     result.append(element)
                 number -= 1
             return result
