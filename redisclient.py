@@ -99,7 +99,7 @@ class AsyncRedisClient(object):
             else:
                 self._subscribe_callback(result)
         except Exception:
-            logging.error("Uncaught callback exception", exc_info=True)
+            logging.error('Uncaught callback exception', exc_info=True)
             raise
         finally:
             if self._command_queue:
@@ -153,12 +153,12 @@ def main():
     def handle_result(result):
         print 'Redis reply: %r' % result
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
-    redis_client.fetch(('LPUSH', 'l', 1), handle_result)
-    redis_client.fetch(('LPUSH', 'l', 2), handle_result)
-    redis_client.fetch(('LRANGE', 'l', 0, -1), handle_result)
-    IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('LLEN', 'l'), handle_result))
+    redis_client.fetch(('lpush', 'l', 1), handle_result)
+    redis_client.fetch(('lpush', 'l', 2), handle_result)
+    redis_client.fetch(('lrange', 'l', 0, -1), handle_result)
+    IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('llen', 'l'), handle_result))
     IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.subscribe('cc', handle_result))
     IOLoop.instance().start()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
