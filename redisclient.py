@@ -21,8 +21,6 @@ import cStringIO
 import logging
 import socket
 
-import redis
-
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 from tornado.util import bytes_type, b
@@ -33,20 +31,19 @@ def encode(request):
     Note that command is a string defined by redis.
     All elements in args should be a string.
     """
-    assert type(request) is tuple
+    assert isinstance(request, tuple)
     data = '*%d\r\n' % len(request) + ''.join(['$%d\r\n%s\r\n' % (len(str(x)), x) for x in request])
     return data
 
 def decode(data):
     """Decode redis bulk bytes to python object."""
-    assert type(data) is bytes_type
+    assert isinstance(data, bytes_type)
     iodata = cStringIO.StringIO(data)
     c = iodata.read(1)
     if c == '+':
         return True
     elif c == '-':
-        error = iodata.readline().rstrip()
-        raise RedisError(error)
+        raise RedisError(iodata.readline().rstrip(), data)
     elif c == ':':
         return int(iodata.readline())
     elif c == '$':
@@ -55,7 +52,7 @@ def decode(data):
             return None
         else:
             data = iodata.read(number)
-            iodata.read(2)
+            #iodata.read(2)
             return data
     elif c == '*':
         number = int(iodata.readline())
@@ -79,7 +76,7 @@ def decode(data):
                 number -= 1
             return result
     else:
-        raise RedisError('Redis Reply TypeError: bulk cannot startswith %r', c)
+        raise RedisError('bulk cannot startswith %r' % c, data)
 
 class AsyncRedisClient(object):
     """An non-blocking Redis client.
@@ -112,7 +109,7 @@ class AsyncRedisClient(object):
         """Creates a AsyncRedisClient.
 
         address is the tuple of redis server address that can be connect by
-        IOStream. It can to ('127.0.0.1', 6379)
+        IOStream. It can be to ('127.0.0.1', 6379).
         """
         self.address         = address
         self.io_loop         = io_loop or IOLoop.instance()
@@ -215,10 +212,9 @@ class RedisError(Exception):
 
     data - Redis error data error code, e.g. -(ERR).
     """
-    def __init__(self, data, message=None):
+    def __init__(self, message, data=None):
         self.data = data
-        message = message or 'Unknown Redis Error'
-        Exception.__init__(self, 'Redis Error %s:%r' % (message, self.data))
+        Exception.__init__(self, 'Redis Error: %s' % message)
 
 
 def test():
