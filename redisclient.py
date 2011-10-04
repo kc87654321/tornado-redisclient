@@ -21,18 +21,24 @@ import cStringIO
 import logging
 import socket
 
+import redis
+
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 from tornado.util import bytes_type, b
 
 def encode(request):
-    '''print repr(encode(('SET', 'mykey', 123)))'''
+    """Encode request (command, *args) to redis bulk bytes.
+
+    Note that command is a string defined by redis.
+    All elements in args should be a string.
+    """
     assert type(request) is tuple
     data = '*%d\r\n' % len(request) + ''.join(['$%d\r\n%s\r\n' % (len(str(x)), x) for x in request])
     return data
 
 def decode(data):
-    '''print decode('*4\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$5\r\nhello\r\n:42\r\n')'''
+    """Decode redis bulk bytes to python object."""
     assert type(data) is bytes_type
     iodata = cStringIO.StringIO(data)
     c = iodata.read(1)
@@ -82,12 +88,13 @@ class AsyncRedisClient(object):
 
         import ioloop
 
-        def handle_request(response):
+        def handle_request(result):
             print 'Redis reply: %r' % result
             ioloop.IOLoop.instance().stop()
 
         redis_client = AsyncRedisClient(('127.0.0.1', 6379))
-        redis_client.fetch(('set', 'foo', 'bar'), handle_result)
+        redis_client.fetch(('set', 'foo', 'bar'), None)
+        redis_client.fetch(('get', 'foo'), handle_request)
         ioloop.IOLoop.instance().start()
 
     This class implements a Redis client on top of Tornado's IOStreams.
@@ -105,7 +112,7 @@ class AsyncRedisClient(object):
         """Creates a AsyncRedisClient.
 
         address is the tuple of redis server address that can be connect by
-        IOStream. It defaults to ('127.0.0.1', 6379)
+        IOStream. It can to ('127.0.0.1', 6379)
         """
         self.address         = address
         self.io_loop         = io_loop or IOLoop.instance()
@@ -140,7 +147,7 @@ class AsyncRedisClient(object):
 
     def _wait_result(self):
         """Read a completed result data from the redis server."""
-        self.stream.read_until(b('\r\n'), self._on_read_first_line)
+        self.stream.read_until('\r\n', self._on_read_first_line)
 
     def _maybe_callback(self, data):
         """Try call callback in _callback_queue when we read a redis result."""
@@ -178,7 +185,7 @@ class AsyncRedisClient(object):
                 self._maybe_callback(self._data)
             else:
                 self._multibulk_number = int(data[1:])
-                self.stream.read_until(b('\r\n'), self._on_read_multibulk_bulk_head)
+                self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
 
     def _on_read_bulk_body(self, data):
         self._data += data
@@ -197,7 +204,7 @@ class AsyncRedisClient(object):
         self._data += data
         self._multibulk_number -= 1
         if self._multibulk_number:
-            self.stream.read_until(b('\r\n'), self._on_read_multibulk_bulk_head)
+            self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
         else:
             self._maybe_callback(self._data)
 
@@ -214,17 +221,14 @@ class RedisError(Exception):
         Exception.__init__(self, 'Redis Error %s:%r' % (message, self.data))
 
 
-def main():
-    import time
-    def handle_result(result):
+def test():
+    def handle_request(result):
         print 'Redis reply: %r' % result
+        IOLoop.instance().stop()
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
-    redis_client.fetch(('lpush', 'l', 1), handle_result)
-    redis_client.fetch(('lpush', 'l', 2), handle_result)
-    redis_client.fetch(('lrange', 'l', 0, -1), handle_result)
-    IOLoop.instance().add_timeout(time.time()+1, lambda:redis_client.fetch(('llen', 'l'), handle_result))
-    IOLoop.instance().add_timeout(time.time()+2, lambda:redis_client.fetch(('psubscribe', '*'), handle_result))
+    redis_client.fetch(('set', 'foo', 'bar'), None)
+    redis_client.fetch(('get', 'foo'), handle_request)
     IOLoop.instance().start()
 
 if __name__ == '__main__':
-    main()
+    test()
