@@ -23,7 +23,7 @@ import socket
 
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
-from tornado.util import bytes_type, b
+from tornado.util import bytes_type
 
 def encode(request):
     """Encode request (command, *args) to redis bulk bytes.
@@ -137,28 +137,28 @@ class AsyncRedisClient(object):
         throw out. You can use try...except to catch the exception (if any)
         in the callback.
         """
-        data = encode(request)
-        self.stream.write(data)
-        self._callback = callback
+        self.stream.write(encode(request))
         self._callback_queue.append(callback)
 
     def _wait_result(self):
         """Read a completed result data from the redis server."""
         self.stream.read_until('\r\n', self._on_read_first_line)
 
-    def _maybe_callback(self, data):
+    def _maybe_callback(self):
         """Try call callback in _callback_queue when we read a redis result."""
         try:
-            if self._result_queue:
-                self._result_queue.append(data)
-                data = self._result_queue.popleft()
-            if self._callback_queue:
-                callback = self._callback_queue.popleft()
+            data           = self._data
+            result_queue   = self._result_queue
+            callback_queue = self._callback_queue
+            if result_queue:
+                result_queue.append(data)
+                data = result_queue.popleft()
+            if callback_queue:
+                callback = callback_queue.popleft()
             else:
                 callback = self._callback
             if callback:
-                result = decode(data)
-                callback(result)
+                callback(decode(data))
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
             self.close()
@@ -170,23 +170,23 @@ class AsyncRedisClient(object):
         self._data = data
         c = data[0]
         if c in ':+-':
-            self._maybe_callback(self._data)
+            self._maybe_callback()
         elif c == '$':
             if data[:3] == '$-1':
-                self._maybe_callback(self._data)
+                self._maybe_callback()
             else:
                 length = int(data[1:])
                 self.stream.read_bytes(length+2, self._on_read_bulk_body)
         elif c == '*':
             if data[1] in '-0' :
-                self._maybe_callback(self._data)
+                self._maybe_callback()
             else:
                 self._multibulk_number = int(data[1:])
                 self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
 
     def _on_read_bulk_body(self, data):
         self._data += data
-        self._maybe_callback(self._data)
+        self._maybe_callback()
 
     def _on_read_multibulk_bulk_head(self, data):
         self._data += data
@@ -195,7 +195,7 @@ class AsyncRedisClient(object):
             length = int(data[1:])
             self.stream.read_bytes(length+2, self._on_read_multibulk_bulk_body)
         else:
-            self._maybe_callback(self._data)
+            self._maybe_callback()
 
     def _on_read_multibulk_bulk_body(self, data):
         self._data += data
@@ -203,7 +203,7 @@ class AsyncRedisClient(object):
         if self._multibulk_number:
             self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
         else:
-            self._maybe_callback(self._data)
+            self._maybe_callback()
 
 class RedisError(Exception):
     """Exception thrown for an unsuccessful Redis request.
