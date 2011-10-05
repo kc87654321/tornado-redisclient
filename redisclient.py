@@ -78,6 +78,53 @@ def decode(data):
     else:
         raise RedisError('bulk cannot startswith %r' % c, data)
 
+class RedisClient(object):
+    """A blocking Redis client.
+
+    This interface is provided for convenience and testing; most applications
+    that are running an IOLoop will want to use `AsyncRedisClient` instead.
+    Typical usage looks like this::
+
+        redis_client = redisclient.RedisClient(('127.0.0.1', 6379))
+        try:
+            result = redis_client.fetch(('set', 'foo', 'bar'))
+            print result
+        except redisclient.RedisError, e:
+            print "Error:", e
+    """
+    def __init__(self, address):
+        self.address = address
+        self._io_loop = IOLoop()
+        self._async_client = AsyncRedisClient(self.address, self._io_loop)
+        self._result = None
+        self._closed = False
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        """Closes the RedisClient, freeing any resources used."""
+        if not self._closed:
+            self._async_client.close()
+            self._io_loop.close()
+            self._closed = True
+
+    def fetch(self, request, **kwargs):
+        """Executes a request, returning an `result`.
+
+        The request may be a tuple object. like ('set','foo','bar')
+
+        If an error occurs during the fetch, we raise an `RedisError`.
+        """
+        def callback(result):
+            self._result = result
+            self._io_loop.stop()
+        self._async_client.fetch(request, callback, **kwargs)
+        self._io_loop.start()
+        result = self._result
+        self._result = None
+        return result
+
 class AsyncRedisClient(object):
     """An non-blocking Redis client.
 
