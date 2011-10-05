@@ -43,7 +43,7 @@ def decode(data):
     if c == '+':
         return iodata.readline()[:-2]
     elif c == '-':
-        raise RedisError(iodata.readline().rstrip(), data)
+        return RedisError(iodata.readline().rstrip(), data)
     elif c == ':':
         return int(iodata.readline())
     elif c == '$':
@@ -260,7 +260,7 @@ class RedisError(Exception):
     """
     def __init__(self, message, data=None):
         self.data = data
-        Exception.__init__(self, 'Redis Error: %s' % message)
+        Exception.__init__(self, '(Error): %s' % message)
 
 
 def test():
