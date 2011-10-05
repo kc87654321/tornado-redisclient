@@ -137,8 +137,8 @@ class AsyncRedisClient(object):
         throw out. You can use try...except to catch the exception (if any)
         in the callback.
         """
-        self.stream.write(encode(request))
         self._callback_queue.append(callback)
+        self.stream.write(encode(request))
 
     def _wait_result(self):
         """Read a completed result data from the redis server."""
