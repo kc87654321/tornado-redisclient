@@ -41,7 +41,7 @@ def decode(data):
     iodata = cStringIO.StringIO(data)
     c = iodata.read(1)
     if c == '+':
-        return True
+        return iodata.readline()[:-2]
     elif c == '-':
         raise RedisError(iodata.readline().rstrip(), data)
     elif c == ':':
@@ -148,15 +148,14 @@ class AsyncRedisClient(object):
         """Try call callback in _callback_queue when we read a redis result."""
         try:
             data           = self._data
+            callback       = self._callback
             result_queue   = self._result_queue
             callback_queue = self._callback_queue
             if result_queue:
                 result_queue.append(data)
                 data = result_queue.popleft()
             if callback_queue:
-                callback = callback_queue.popleft()
-            else:
-                callback = self._callback
+                callback = self._callback = callback_queue.popleft()
             if callback:
                 callback(decode(data))
         except Exception:
@@ -222,8 +221,7 @@ def test():
         print 'Redis reply: %r' % result
         IOLoop.instance().stop()
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
-    redis_client.fetch(('set', 'foo', 'bar'), None)
-    redis_client.fetch(('get', 'foo'), handle_request)
+    redis_client.fetch(('set','foo','bar'), handle_request)
     IOLoop.instance().start()
 
 if __name__ == '__main__':
