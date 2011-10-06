@@ -16,11 +16,10 @@
 
 """Blocking and non-blocking Redis client implementations using IOStream."""
 
-import collections
-import cStringIO
 import logging
 import socket
 
+from collections import deque
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 from tornado.util import bytes_type
@@ -35,43 +34,41 @@ def encode(request):
     data = '*%d\r\n' % len(request) + ''.join(['$%d\r\n%s\r\n' % (len(str(x)), x) for x in request])
     return data
 
-def decode(data):
-    """Decode redis bulk bytes to python object."""
-    assert isinstance(data, bytes_type)
-    iodata = cStringIO.StringIO(data)
-    c = iodata.read(1)
+def decode(read_buffer):
+    """Decode redis buffer to python object."""
+    assert isinstance(read_buffer, deque)
+    first_line = read_buffer.popleft()
+    c = first_line[0]
     if c == '+':
-        return iodata.readline()[:-2]
+        return first_line[1:-2]
     elif c == '-':
-        return RedisError(iodata.readline().rstrip(), data)
+        return RedisError(first_line[1:-2], data)
     elif c == ':':
-        return int(iodata.readline())
+        return int(first_line[1:])
     elif c == '$':
-        number = int(iodata.readline())
+        number = int(first_line[1:])
         if number == -1:
             return None
         else:
-            data = iodata.read(number)
-            #iodata.read(2)
-            return data
+            return read_buffer[0][:number]
     elif c == '*':
-        number = int(iodata.readline())
+        number = int(first_line[1:])
         if number == -1:
             return None
         else:
             result = []
             while number:
-                c = iodata.read(1)
+                line = read_buffer.popleft()
+                c = line[0]
                 if c == '$':
-                    length  = int(iodata.readline())
-                    element = iodata.read(length)
-                    iodata.read(2)
+                    length  = int(line[1:])
+                    element = read_buffer.popleft()[:length]
                     result.append(element)
                 else:
                     if c == ':':
-                        element = int(iodata.readline())
+                        element = int(line[1:])
                     else:
-                        element = iodata.readline()[:-2]
+                        element = read_buffer.popleft()[:-2]
                     result.append(element)
                 number -= 1
             return result
@@ -160,9 +157,10 @@ class AsyncRedisClient(object):
         """
         self.address         = address
         self.io_loop         = io_loop or IOLoop.instance()
-        self._callback_queue = collections.deque()
+        self._callback_queue = deque()
         self._callback       = None
-        self._result_queue   = collections.deque()
+        self._read_buffer    = None
+        self._result_queue   = deque()
         self.socket          = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.stream          = IOStream(self.socket, self.io_loop)
         self.stream.connect(self.address, self._wait_result)
@@ -189,22 +187,23 @@ class AsyncRedisClient(object):
 
     def _wait_result(self):
         """Read a completed result data from the redis server."""
+        self._read_buffer = deque()
         self.stream.read_until('\r\n', self._on_read_first_line)
 
     def _maybe_callback(self):
         """Try call callback in _callback_queue when we read a redis result."""
         try:
-            data           = self._data
+            read_buffer    = self._read_buffer
             callback       = self._callback
             result_queue   = self._result_queue
             callback_queue = self._callback_queue
             if result_queue:
-                result_queue.append(data)
-                data = result_queue.popleft()
+                result_queue.append(read_buffer)
+                read_buffer = result_queue.popleft()
             if callback_queue:
                 callback = self._callback = callback_queue.popleft()
             if callback:
-                callback(decode(data))
+                callback(decode(read_buffer))
         except Exception:
             logging.error('Uncaught callback exception', exc_info=True)
             self.close()
@@ -213,7 +212,7 @@ class AsyncRedisClient(object):
             self._wait_result()
 
     def _on_read_first_line(self, data):
-        self._data = data
+        self._read_buffer.append(data)
         c = data[0]
         if c in ':+-':
             self._maybe_callback()
@@ -231,11 +230,11 @@ class AsyncRedisClient(object):
                 self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
 
     def _on_read_bulk_body(self, data):
-        self._data += data
+        self._read_buffer.append(data)
         self._maybe_callback()
 
     def _on_read_multibulk_bulk_head(self, data):
-        self._data += data
+        self._read_buffer.append(data)
         c = data[0]
         if c == '$':
             length = int(data[1:])
@@ -244,7 +243,7 @@ class AsyncRedisClient(object):
             self._maybe_callback()
 
     def _on_read_multibulk_bulk_body(self, data):
-        self._data += data
+        self._read_buffer.append(data)
         self._multibulk_number -= 1
         if self._multibulk_number:
             self.stream.read_until('\r\n', self._on_read_multibulk_bulk_head)
@@ -266,9 +265,10 @@ class RedisError(Exception):
 def test():
     def handle_request(result):
         print 'Redis reply: %r' % result
-        IOLoop.instance().stop()
     redis_client = AsyncRedisClient(('127.0.0.1', 6379))
-    redis_client.fetch(('set','foo','bar'), handle_request)
+    redis_client.fetch(('del', 'foo'), handle_request)
+    redis_client.fetch(('set', 'foo', 'bar'), handle_request)
+    redis_client.fetch(('get', 'foo'), lambda x:(handle_request(x),IOLoop.instance().stop()))
     IOLoop.instance().start()
 
 if __name__ == '__main__':
